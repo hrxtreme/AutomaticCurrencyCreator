@@ -84,75 +84,139 @@ class BrowserDriver:
         
         self.page.wait_for_url(lambda url: "okta.com" not in url, timeout=120000)
         self.progress_callback("MFA approved. Login successful!")
+        
+        # --- MODIFIED: Added a short pause to prevent race conditions after login ---
+        self.progress_callback("Pausing briefly for dashboard to initialize...")
+        self.page.wait_for_timeout(3000) # 3-second pause
 
     def wait_for_page_to_settle(self):
-        """
-        Waits for the page to be fully loaded and network idle.
-        This prevents race conditions after login or navigation.
-        """
         self.progress_callback("Waiting for page to fully load...")
         self.page.wait_for_load_state("networkidle", timeout=30000)
         self.progress_callback("Page has settled.")
 
-    def create_standard_user(self, base_url, user_details, user_password):
+    def navigate_to_create_user_page(self, base_url):
+        """Navigates to the user creation page once per batch."""
         if not self.page:
             raise Exception("Browser is not launched.")
-
         create_url = f"{base_url}/CreateUserAccount"
         self.progress_callback(f"Navigating to Create User page: {create_url}")
         self.page.goto(create_url, timeout=60000)
         self.wait_for_page_to_settle()
 
+    def fill_user_creation_form(self, user_details, user_password):
+        """Fills and submits the form for a single user."""
         username = f"{user_details['Username']}{user_details['Postfix']}"
         currency_code = str(user_details['Currency']).split(' ')[0]
 
-        self.progress_callback(f"Creating user: {username} with currency {currency_code}")
+        self.progress_callback(f"--- Creating user account: {username} ---")
 
-        # 1. Player Type is skipped as requested.
-        self.progress_callback("  - Player Type: Skipped.")
-
-        # 2. Market Selection
         self.progress_callback("  - Setting Market...")
         market_dropdown_button = self.page.locator('//*[@id="accountForm"]/div/div[2]/div/div/input')
         expect(market_dropdown_button).to_be_visible(timeout=15000)
         market_dropdown_button.click()
-        # --- MODIFIED: Using a more specific locator to find the visible <span> ---
         self.page.locator("span", has_text="DEF (No Regulated Market)").click()
         
-        # 3. Product Selection
         self.progress_callback("  - Setting Product...")
         product_dropdown_button = self.page.locator('//*[@id="accountForm"]/div/div[3]/div/div/input')
         expect(product_dropdown_button).to_be_visible(timeout=15000)
         product_dropdown_button.click()
-        # --- MODIFIED: Using a more specific locator to find the visible <span> ---
         self.page.locator("span", has_text="Island Paradise Mobile (5007)").click()
         
-        # 4. Username
         self.progress_callback("  - Filling Username...")
         username_locator = self.page.locator("#username")
         expect(username_locator).to_be_visible(timeout=15000)
         username_locator.fill(username)
         
-        # 5. Password
         self.progress_callback("  - Filling Password...")
         password_locator = self.page.locator("#password")
         expect(password_locator).to_be_visible(timeout=15000)
         password_locator.fill(user_password)
         
-        # --- These locators are still placeholders ---
         self.progress_callback("  - Setting Currency...")
-        currency_locator = self.page.locator("#placeholder-currency")
-        expect(currency_locator).to_be_visible(timeout=30000)
-        currency_locator.select_option(label=currency_code)
+        currency_dropdown_button = self.page.locator('//div[9]//div[1]//div[1]//input[1]')
+        expect(currency_dropdown_button).to_be_visible(timeout=15000)
+        currency_dropdown_button.click()
+        self.page.locator(f"span:has-text('({currency_code})')").click()
         
         self.progress_callback("  - Clicking 'Create Account'...")
-        create_button_locator = self.page.locator("#placeholder-create-button")
+        create_button_locator = self.page.locator("#submit")
         expect(create_button_locator).to_be_visible(timeout=30000)
         create_button_locator.click()
 
-        success_locator = self.page.locator("text=User account created successfully")
-        expect(success_locator).to_be_visible(timeout=30000)
-        self.progress_callback(f"Successfully created user: {username}")
+        try:
+            start_time = time.time()
+            while time.time() - start_time < 30:
+                success_locator = self.page.locator(".card-panel.green")
+                error_locator = self.page.locator(".card-panel.red")
+
+                if success_locator.is_visible():
+                    self.progress_callback(f"  - Successfully created user: {username}")
+                    return True
+                
+                if error_locator.is_visible():
+                    self.progress_callback("  - [ERROR] Creation failed. Checking logs...")
+                    log_header = self.page.locator("div.collapsible-header:has-text('Log')")
+                    expect(log_header).to_be_visible(timeout=10000)
+                    log_header.click()
+                    
+                    log_message_locator = self.page.locator("#resultContainerMessage")
+                    expect(log_message_locator).to_be_visible(timeout=10000)
+                    error_details = log_message_locator.inner_text()
+                    
+                    self.progress_callback(f"  - Detailed Error: {error_details.strip()}")
+                    return False
+                
+                self.page.wait_for_timeout(500)
+            
+            raise Exception("Timeout: Neither success nor error panel became visible after 30 seconds.")
+
+        except Exception as e:
+            self.progress_callback(f"  - [CRITICAL] Could not determine creation status. Error: {e}")
+            return False
+
+    def migrate_user_to_lvc(self, base_url, username):
+        self.progress_callback(f"--- Starting LVC Migration for user: {username} ---")
+        
+        user_accounts_url = f"{base_url}/useraccounts"
+        self.progress_callback(f"Navigating to User Accounts page: {user_accounts_url}")
+        self.page.goto(user_accounts_url, timeout=60000)
+        self.wait_for_page_to_settle()
+
+        self.progress_callback("Clicking search icon to reveal search bar...")
+        search_button_locator = self.page.locator("//button[@aria-label='Search']")
+        expect(search_button_locator).to_be_visible(timeout=15000)
+        search_button_locator.click()
+
+        self.progress_callback(f"Searching for user: {username}")
+        search_input_locator = self.page.locator("//input[@type='text']").first
+        expect(search_input_locator).to_be_visible(timeout=15000)
+        search_input_locator.fill(username)
+        self.page.keyboard.press("Enter")
+        
+        self.wait_for_page_to_settle()
+        self.progress_callback("Search complete.")
+
+        self.progress_callback("Locating user in table...")
+        user_row_locator = self.page.locator(f"tr:has-text('{username}')")
+        expect(user_row_locator).to_be_visible(timeout=15000)
+        self.progress_callback("User row found.")
+
+        self.progress_callback("Clicking 'three dots' menu...")
+        three_dots_button = user_row_locator.locator('[aria-label="Actions"], [aria-label="More options"], button:has(svg[data-testid="MoreVertIcon"])').first
+        expect(three_dots_button).to_be_visible(timeout=10000)
+        three_dots_button.click()
+        
+        self.progress_callback("Clicking 'Migrate LVCS' option...")
+        migrate_option = self.page.get_by_role("menuitem", name="Migrate LVCS")
+        expect(migrate_option).to_be_visible(timeout=10000)
+        migrate_option.click()
+
+        expect(self.page.get_by_text("User migrated successfully")).to_be_visible(timeout=15000)
+        self.progress_callback(f"Successfully migrated {username} to LVC.")
+
+    def add_balance_to_user(self, base_url, username, amount):
+        self.progress_callback(f"--- Adding balance to user: {username} ---")
+        self.progress_callback(f"[PLACEHOLDER] Added balance of {amount} to {username}.")
 
     def close(self):
         if self.browser:
@@ -194,7 +258,6 @@ def parse_user_data(file_path):
     return lvc_users, standard_users
 
 def parse_credentials_file(file_path):
-    """Reads email and password from a simple text file."""
     with open(file_path, 'r') as f:
         lines = f.readlines()
     if len(lines) < 2:
@@ -202,6 +265,9 @@ def parse_credentials_file(file_path):
     email = lines[0].strip()
     password = lines[1].strip()
     return email, password
+
+def update_excel_with_lvc_names(file_path, migrated_users):
+    print(f"[PLACEHOLDER] Would now update {file_path} with migrated usernames.")
 
 # =============================================================================
 # Automation Worker (Controller)
@@ -211,7 +277,7 @@ class AutomationWorker(QObject):
     automation_error = pyqtSignal(str)
     automation_finished = pyqtSignal()
 
-    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, debug_mode):
+    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, debug_mode):
         super().__init__()
         self.gtp_url = gtp_url
         self.email = email
@@ -219,6 +285,7 @@ class AutomationWorker(QObject):
         self.lvc_users = lvc_users
         self.standard_users = standard_users
         self.user_password = user_password
+        self.user_data_path = user_data_path
         self.debug_mode = debug_mode
         self.is_running = True
         self.driver = None
@@ -237,23 +304,59 @@ class AutomationWorker(QObject):
             self.driver.login(self.gtp_url, self.email, self.password)
             if not self.is_running: return
             
-            self.driver.wait_for_page_to_settle()
+            lvc_users_to_process = self.lvc_users[:1] if self.debug_mode else self.lvc_users
+            standard_users_to_process = self.standard_users[:1] if self.debug_mode and not self.lvc_users else self.standard_users
+
+            # == STEP A: Create all LVC user accounts ==
+            self.progress_update.emit("\n--- STEP A: Creating LVC User Accounts ---")
+            created_lvc_users = []
+            if lvc_users_to_process:
+                self.driver.navigate_to_create_user_page(self.gtp_url)
+                for user in lvc_users_to_process:
+                    if not self.is_running: break
+                    success = self.driver.fill_user_creation_form(user, self.user_password)
+                    if success:
+                        created_lvc_users.append(user)
             if not self.is_running: return
 
-            self.progress_update.emit("\nStep 2: Processing LVC users...")
-            for user in self.lvc_users:
+            # == STEP B: Migrate all recently created users to LVC ==
+            self.progress_update.emit("\n--- STEP B: Migrating Users to LVC ---")
+            migrated_lvc_users = []
+            for user in created_lvc_users:
                 if not self.is_running: break
-                self.driver.create_standard_user(self.gtp_url, user, self.user_password)
-                if self.debug_mode:
-                    self.progress_update.emit("--- DEBUG MODE: Halting after first LVC user. ---")
-                    break
-            
+                initial_username = f"{user['Username']}{user['Postfix']}"
+                self.driver.migrate_user_to_lvc(self.gtp_url, initial_username)
+                migrated_lvc_users.append(user)
+            if migrated_lvc_users:
+                update_excel_with_lvc_names(self.user_data_path, migrated_lvc_users)
+            if not self.is_running: return
+
+            # == STEP C: Add balance to all migrated LVC users ==
+            self.progress_update.emit("\n--- STEP C: Adding Balance to LVC Users ---")
+            for user in migrated_lvc_users:
+                if not self.is_running: break
+                lvc_username = f"LVC_{user['Username']}{user['Postfix']}"
+                self.driver.add_balance_to_user(self.gtp_url, lvc_username, "9999999999999")
+            if not self.is_running: return
+
+            # --- Process Standard Users if not in debug mode ---
             if not self.debug_mode:
+                self.progress_update.emit("\n--- Creating Standard User Accounts ---")
+                created_standard_users = []
+                if standard_users_to_process:
+                    self.driver.navigate_to_create_user_page(self.gtp_url)
+                    for user in standard_users_to_process:
+                        if not self.is_running: break
+                        success = self.driver.fill_user_creation_form(user, self.user_password)
+                        if success:
+                            created_standard_users.append(user)
                 if not self.is_running: return
-                self.progress_update.emit("\nStep 3: Processing Standard users...")
-                for user in self.standard_users:
+
+                self.progress_update.emit("\n--- Adding Balance to Standard Users ---")
+                for user in created_standard_users:
                     if not self.is_running: break
-                    self.driver.create_standard_user(self.gtp_url, user, self.user_password)
+                    standard_username = f"{user['Username']}{user['Postfix']}"
+                    self.driver.add_balance_to_user(self.gtp_url, standard_username, "9999999")
 
             if self.is_running:
                 self.progress_update.emit("\nAutomation complete!")
@@ -344,7 +447,7 @@ class MainWindow(QMainWindow):
         user_pass_label = QLabel("Default Password for New User Accounts:")
         self.main_layout.addWidget(user_pass_label)
         self.user_password_input = QLineEdit()
-        self.user_password_input.setText("snow") # Pre-filled as requested
+        self.user_password_input.setText("snow")
         self.main_layout.addWidget(self.user_password_input)
 
         self.debug_mode_checkbox = QCheckBox("Debug Mode (Process first LVC user only)")
@@ -409,7 +512,7 @@ class MainWindow(QMainWindow):
         self.toggle_controls(False)
 
         self.automation_thread = QThread()
-        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, debug_mode)
+        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, debug_mode)
         self.worker.moveToThread(self.automation_thread)
 
         self.worker.progress_update.connect(self.log_message)

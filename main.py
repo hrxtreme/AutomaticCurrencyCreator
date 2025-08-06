@@ -204,12 +204,12 @@ class BrowserDriver:
         three_dots_button.click()
         
         self.progress_callback("Clicking 'Migrate LVCS' option...")
+        # --- MODIFIED: Removed the problematic generic wait ---
         migrate_option = self.page.get_by_role("menuitem", name="Migrate LVCS")
         expect(migrate_option).to_be_visible(timeout=10000)
         migrate_option.click()
 
         self.progress_callback("Confirming migration...")
-        # --- MODIFIED: Added a smart wait for the confirmation dialog to appear ---
         confirmation_dialog = self.page.locator("[role='dialog']")
         expect(confirmation_dialog).to_be_visible(timeout=10000)
         

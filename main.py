@@ -199,7 +199,7 @@ class BrowserDriver:
         self.progress_callback("User row found.")
 
         self.progress_callback("Clicking 'three dots' menu...")
-        three_dots_button = user_row_locator.locator("button:has(span.MuiIconButton-label)")
+        three_dots_button = user_row_locator.locator("span.MuiIconButton-label")
         expect(three_dots_button).to_be_visible(timeout=10000)
         three_dots_button.click()
         
@@ -209,7 +209,11 @@ class BrowserDriver:
         migrate_option.click()
 
         self.progress_callback("Confirming migration...")
-        confirmation_button = self.page.get_by_role("button", name="Migrate")
+        # --- MODIFIED: Added a smart wait for the confirmation dialog to appear ---
+        confirmation_dialog = self.page.locator("[role='dialog']")
+        expect(confirmation_dialog).to_be_visible(timeout=10000)
+        
+        confirmation_button = confirmation_dialog.get_by_role("button", name="Migrate")
         expect(confirmation_button).to_be_visible(timeout=10000)
         confirmation_button.click()
 
@@ -227,6 +231,14 @@ class BrowserDriver:
 
         self.progress_callback(f"Filling balance form for {username}...")
         
+        try:
+            error_locator = self.page.locator("#loginName-error")
+            if error_locator.is_visible(timeout=1000):
+                self.progress_callback(f"  - [ERROR] User '{username}' not found on balance page. Skipping.")
+                return
+        except:
+            pass
+
         username_locator = self.page.locator("#loginName")
         expect(username_locator).to_be_visible(timeout=15000)
         username_locator.fill(username)

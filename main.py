@@ -85,9 +85,8 @@ class BrowserDriver:
         self.page.wait_for_url(lambda url: "okta.com" not in url, timeout=120000)
         self.progress_callback("MFA approved. Login successful!")
         
-        # --- MODIFIED: Added a short pause to prevent race conditions after login ---
         self.progress_callback("Pausing briefly for dashboard to initialize...")
-        self.page.wait_for_timeout(3000) # 3-second pause
+        self.page.wait_for_timeout(3000)
 
     def wait_for_page_to_settle(self):
         self.progress_callback("Waiting for page to fully load...")
@@ -95,7 +94,6 @@ class BrowserDriver:
         self.progress_callback("Page has settled.")
 
     def navigate_to_create_user_page(self, base_url):
-        """Navigates to the user creation page once per batch."""
         if not self.page:
             raise Exception("Browser is not launched.")
         create_url = f"{base_url}/CreateUserAccount"
@@ -104,7 +102,6 @@ class BrowserDriver:
         self.wait_for_page_to_settle()
 
     def fill_user_creation_form(self, user_details, user_password):
-        """Fills and submits the form for a single user."""
         username = f"{user_details['Username']}{user_details['Postfix']}"
         currency_code = str(user_details['Currency']).split(' ')[0]
 
@@ -202,7 +199,7 @@ class BrowserDriver:
         self.progress_callback("User row found.")
 
         self.progress_callback("Clicking 'three dots' menu...")
-        three_dots_button = user_row_locator.locator('[aria-label="Actions"], [aria-label="More options"], button:has(svg[data-testid="MoreVertIcon"])').first
+        three_dots_button = user_row_locator.locator("button:has(span.MuiIconButton-label)")
         expect(three_dots_button).to_be_visible(timeout=10000)
         three_dots_button.click()
         
@@ -211,12 +208,48 @@ class BrowserDriver:
         expect(migrate_option).to_be_visible(timeout=10000)
         migrate_option.click()
 
-        expect(self.page.get_by_text("User migrated successfully")).to_be_visible(timeout=15000)
+        self.progress_callback("Confirming migration...")
+        confirmation_button = self.page.get_by_role("button", name="Migrate")
+        expect(confirmation_button).to_be_visible(timeout=10000)
+        confirmation_button.click()
+
+        self.progress_callback("Pausing for 1 second to allow migration to complete...")
+        self.page.wait_for_timeout(1000)
         self.progress_callback(f"Successfully migrated {username} to LVC.")
 
     def add_balance_to_user(self, base_url, username, amount):
         self.progress_callback(f"--- Adding balance to user: {username} ---")
-        self.progress_callback(f"[PLACEHOLDER] Added balance of {amount} to {username}.")
+        
+        balance_url = f"{base_url}/BalanceUserAccount"
+        self.progress_callback(f"Navigating to Balance page: {balance_url}")
+        self.page.goto(balance_url, timeout=60000)
+        self.wait_for_page_to_settle()
+
+        self.progress_callback(f"Filling balance form for {username}...")
+        
+        username_locator = self.page.locator("#loginName")
+        expect(username_locator).to_be_visible(timeout=15000)
+        username_locator.fill(username)
+
+        amount_locator = self.page.locator("#amount")
+        expect(amount_locator).to_be_visible(timeout=15000)
+        amount_locator.fill(amount)
+
+        set_balance_button = self.page.locator("#submit")
+        expect(set_balance_button).to_be_visible(timeout=15000)
+        set_balance_button.click()
+
+        try:
+            start_time = time.time()
+            while time.time() - start_time < 30:
+                success_locator = self.page.locator(".card-panel.green")
+                if success_locator.is_visible():
+                    self.progress_callback(f"  - Successfully added balance to {username}")
+                    return
+                self.page.wait_for_timeout(500)
+            raise Exception("Timeout: Could not find success message after setting balance.")
+        except Exception as e:
+            self.progress_callback(f"  - [CRITICAL] Could not determine balance status. Error: {e}")
 
     def close(self):
         if self.browser:
@@ -266,8 +299,27 @@ def parse_credentials_file(file_path):
     password = lines[1].strip()
     return email, password
 
-def update_excel_with_lvc_names(file_path, migrated_users):
-    print(f"[PLACEHOLDER] Would now update {file_path} with migrated usernames.")
+def update_excel_with_lvc_names(file_path, migrated_user):
+    """
+    Updates the original Excel file with the new LVC prefixed username.
+    """
+    try:
+        with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+            df = pd.read_excel(file_path, sheet_name='Sheet1', header=None)
+            
+            original_username = migrated_user['Username']
+            original_currency = migrated_user['Currency']
+            
+            for index, row in df.iterrows():
+                if row[0] == original_currency and row[1] == original_username:
+                    df.at[index, 1] = f"LVC_{original_username}"
+                    break
+            
+            df.to_excel(writer, sheet_name='Sheet1', index=False, header=False)
+            print(f"Successfully updated username for {original_username} in {file_path}")
+    except Exception as e:
+        print(f"Error updating Excel file: {e}")
+
 
 # =============================================================================
 # Automation Worker (Controller)
@@ -321,19 +373,16 @@ class AutomationWorker(QObject):
 
             # == STEP B: Migrate all recently created users to LVC ==
             self.progress_update.emit("\n--- STEP B: Migrating Users to LVC ---")
-            migrated_lvc_users = []
             for user in created_lvc_users:
                 if not self.is_running: break
                 initial_username = f"{user['Username']}{user['Postfix']}"
                 self.driver.migrate_user_to_lvc(self.gtp_url, initial_username)
-                migrated_lvc_users.append(user)
-            if migrated_lvc_users:
-                update_excel_with_lvc_names(self.user_data_path, migrated_lvc_users)
+                update_excel_with_lvc_names(self.user_data_path, user)
             if not self.is_running: return
 
             # == STEP C: Add balance to all migrated LVC users ==
             self.progress_update.emit("\n--- STEP C: Adding Balance to LVC Users ---")
-            for user in migrated_lvc_users:
+            for user in created_lvc_users:
                 if not self.is_running: break
                 lvc_username = f"LVC_{user['Username']}{user['Postfix']}"
                 self.driver.add_balance_to_user(self.gtp_url, lvc_username, "9999999999999")

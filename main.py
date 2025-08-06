@@ -87,52 +87,59 @@ class BrowserDriver:
 
     def wait_for_page_to_settle(self):
         """
-        NEW: Waits for the page to be fully loaded and network idle.
+        Waits for the page to be fully loaded and network idle.
         This prevents race conditions after login or navigation.
         """
         self.progress_callback("Waiting for page to fully load...")
         self.page.wait_for_load_state("networkidle", timeout=30000)
         self.progress_callback("Page has settled.")
 
-    def create_standard_user(self, base_url, user_details):
+    def create_standard_user(self, base_url, user_details, user_password):
         if not self.page:
             raise Exception("Browser is not launched.")
 
         create_url = f"{base_url}/CreateUserAccount"
         self.progress_callback(f"Navigating to Create User page: {create_url}")
         self.page.goto(create_url, timeout=60000)
+        self.wait_for_page_to_settle()
 
         username = f"{user_details['Username']}{user_details['Postfix']}"
         currency_code = str(user_details['Currency']).split(' ')[0]
 
         self.progress_callback(f"Creating user: {username} with currency {currency_code}")
 
-        # --- These locators are placeholders and will need to be provided by the user ---
-        self.progress_callback("  - Setting Player Type...")
-        player_type_locator = self.page.locator("#placeholder-player-type")
-        expect(player_type_locator).to_be_visible(timeout=30000)
-        player_type_locator.select_option(label="Real Player")
-        
+        # 1. Player Type is skipped as requested.
+        self.progress_callback("  - Player Type: Skipped.")
+
+        # 2. Market Selection
         self.progress_callback("  - Setting Market...")
-        market_locator = self.page.locator("#placeholder-market")
-        expect(market_locator).to_be_visible(timeout=30000)
-        market_locator.select_option(label="DEF (No Regulated Market)")
+        market_dropdown_button = self.page.locator('//*[@id="accountForm"]/div/div[2]/div/div/input')
+        expect(market_dropdown_button).to_be_visible(timeout=15000)
+        market_dropdown_button.click()
+        # --- MODIFIED: Using a more specific locator to find the visible <span> ---
+        self.page.locator("span", has_text="DEF (No Regulated Market)").click()
         
+        # 3. Product Selection
         self.progress_callback("  - Setting Product...")
-        product_locator = self.page.locator("#placeholder-product")
-        expect(product_locator).to_be_visible(timeout=30000)
-        product_locator.select_option(label="Island Paradise Mobile (5007)")
+        product_dropdown_button = self.page.locator('//*[@id="accountForm"]/div/div[3]/div/div/input')
+        expect(product_dropdown_button).to_be_visible(timeout=15000)
+        product_dropdown_button.click()
+        # --- MODIFIED: Using a more specific locator to find the visible <span> ---
+        self.page.locator("span", has_text="Island Paradise Mobile (5007)").click()
         
+        # 4. Username
         self.progress_callback("  - Filling Username...")
-        username_locator = self.page.locator("#placeholder-username")
-        expect(username_locator).to_be_visible(timeout=30000)
+        username_locator = self.page.locator("#username")
+        expect(username_locator).to_be_visible(timeout=15000)
         username_locator.fill(username)
         
+        # 5. Password
         self.progress_callback("  - Filling Password...")
-        password_locator = self.page.locator("#placeholder-password")
-        expect(password_locator).to_be_visible(timeout=30000)
-        password_locator.fill("snow")
+        password_locator = self.page.locator("#password")
+        expect(password_locator).to_be_visible(timeout=15000)
+        password_locator.fill(user_password)
         
+        # --- These locators are still placeholders ---
         self.progress_callback("  - Setting Currency...")
         currency_locator = self.page.locator("#placeholder-currency")
         expect(currency_locator).to_be_visible(timeout=30000)
@@ -204,13 +211,14 @@ class AutomationWorker(QObject):
     automation_error = pyqtSignal(str)
     automation_finished = pyqtSignal()
 
-    def __init__(self, gtp_url, email, password, lvc_users, standard_users, debug_mode):
+    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, debug_mode):
         super().__init__()
         self.gtp_url = gtp_url
         self.email = email
         self.password = password
         self.lvc_users = lvc_users
         self.standard_users = standard_users
+        self.user_password = user_password
         self.debug_mode = debug_mode
         self.is_running = True
         self.driver = None
@@ -229,14 +237,13 @@ class AutomationWorker(QObject):
             self.driver.login(self.gtp_url, self.email, self.password)
             if not self.is_running: return
             
-            # --- NEW: Wait for the page to settle before proceeding ---
             self.driver.wait_for_page_to_settle()
             if not self.is_running: return
 
             self.progress_update.emit("\nStep 2: Processing LVC users...")
             for user in self.lvc_users:
                 if not self.is_running: break
-                self.driver.create_standard_user(self.gtp_url, user)
+                self.driver.create_standard_user(self.gtp_url, user, self.user_password)
                 if self.debug_mode:
                     self.progress_update.emit("--- DEBUG MODE: Halting after first LVC user. ---")
                     break
@@ -246,7 +253,7 @@ class AutomationWorker(QObject):
                 self.progress_update.emit("\nStep 3: Processing Standard users...")
                 for user in self.standard_users:
                     if not self.is_running: break
-                    self.driver.create_standard_user(self.gtp_url, user)
+                    self.driver.create_standard_user(self.gtp_url, user, self.user_password)
 
             if self.is_running:
                 self.progress_update.emit("\nAutomation complete!")
@@ -292,7 +299,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.config = {}
         self.setWindowTitle("GTP User Automation Tool v1.0")
-        self.setGeometry(100, 100, 700, 500) # Adjusted height
+        self.setGeometry(100, 100, 700, 550)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
@@ -314,7 +321,7 @@ class MainWindow(QMainWindow):
         self.gtp_dropdown.addItems(self.GTP_VERSIONS.keys())
         self.main_layout.addWidget(self.gtp_dropdown)
         
-        login_header = QLabel("2. File Selection")
+        login_header = QLabel("2. File & Password Selection")
         login_header.setFont(header_font)
         self.main_layout.addWidget(login_header)
 
@@ -334,6 +341,12 @@ class MainWindow(QMainWindow):
         user_layout.addWidget(self.user_file_path_label, 1)
         self.main_layout.addLayout(user_layout)
         
+        user_pass_label = QLabel("Default Password for New User Accounts:")
+        self.main_layout.addWidget(user_pass_label)
+        self.user_password_input = QLineEdit()
+        self.user_password_input.setText("snow") # Pre-filled as requested
+        self.main_layout.addWidget(self.user_password_input)
+
         self.debug_mode_checkbox = QCheckBox("Debug Mode (Process first LVC user only)")
         self.main_layout.addWidget(self.debug_mode_checkbox)
         
@@ -361,11 +374,13 @@ class MainWindow(QMainWindow):
         gtp_url = self.GTP_VERSIONS[gtp_selection]
         cred_path = self.cred_path_label.text()
         user_data_path = self.user_file_path_label.text()
+        user_password = self.user_password_input.text()
         debug_mode = self.debug_mode_checkbox.isChecked()
 
         errors = []
         if "No file selected" in cred_path: errors.append("You must select a credentials file.")
         if "No file selected" in user_data_path: errors.append("You must select a user data file.")
+        if not user_password: errors.append("The password for new users cannot be empty.")
         if errors:
             QMessageBox.warning(self, "Input Error", "\n".join(errors))
             return
@@ -394,7 +409,7 @@ class MainWindow(QMainWindow):
         self.toggle_controls(False)
 
         self.automation_thread = QThread()
-        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, debug_mode)
+        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, debug_mode)
         self.worker.moveToThread(self.automation_thread)
 
         self.worker.progress_update.connect(self.log_message)
@@ -466,6 +481,7 @@ class MainWindow(QMainWindow):
         self.gtp_dropdown.setEnabled(enabled)
         self.select_cred_button.setEnabled(enabled)
         self.select_user_file_button.setEnabled(enabled)
+        self.user_password_input.setEnabled(enabled)
         self.start_button.setEnabled(enabled)
         self.debug_mode_checkbox.setEnabled(enabled)
         

@@ -190,6 +190,9 @@ class BrowserDriver:
         search_input_locator.fill(username)
         self.page.keyboard.press("Enter")
         
+        # --- MODIFIED: Added a smart wait for search results to load ---
+        self.progress_callback("Waiting for search results...")
+        self.page.wait_for_timeout(1000) # Wait 1 seconds as requested
         self.wait_for_page_to_settle()
         self.progress_callback("Search complete.")
 
@@ -204,16 +207,12 @@ class BrowserDriver:
         three_dots_button.click()
         
         self.progress_callback("Clicking 'Migrate LVCS' option...")
-        # --- MODIFIED: Removed the problematic generic wait ---
         migrate_option = self.page.get_by_role("menuitem", name="Migrate LVCS")
         expect(migrate_option).to_be_visible(timeout=10000)
         migrate_option.click()
 
         self.progress_callback("Confirming migration...")
-        confirmation_dialog = self.page.locator("[role='dialog']")
-        expect(confirmation_dialog).to_be_visible(timeout=10000)
-        
-        confirmation_button = confirmation_dialog.get_by_role("button", name="Migrate")
+        confirmation_button = self.page.get_by_role("button", name="Migrate")
         expect(confirmation_button).to_be_visible(timeout=10000)
         confirmation_button.click()
 
@@ -450,8 +449,8 @@ class AutomationWorker(QObject):
 # =============================================================================
 class MainWindow(QMainWindow):
     GTP_VERSIONS = {
+        "GTP 554": "https://admin-app1-gtp554.installprogram.eu",
         "GTP 640": "https://admin-app1-gtp640.installprogram.eu",
-        "GTP 641": "https://admin-app1-gtp641.installprogram.eu",
         "GTP 642": "https://admin-app1-gtp642.installprogram.eu",
         "GTP 643": "https://admin-app1-gtp643.installprogram.eu",
         "GTP 644": "https://admin-app1-gtp644.installprogram.eu",

@@ -7,7 +7,7 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QComboBox, QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog,
-    QMessageBox, QCheckBox
+    QMessageBox, QCheckBox, QRadioButton, QGroupBox
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal
@@ -190,9 +190,8 @@ class BrowserDriver:
         search_input_locator.fill(username)
         self.page.keyboard.press("Enter")
         
-        # --- MODIFIED: Added a smart wait for search results to load ---
         self.progress_callback("Waiting for search results...")
-        self.page.wait_for_timeout(1000) # Wait 1 seconds as requested
+        self.page.wait_for_timeout(1500)
         self.wait_for_page_to_settle()
         self.progress_callback("Search complete.")
 
@@ -272,8 +271,13 @@ class BrowserDriver:
 # =============================================================================
 # Helper Functions
 # =============================================================================
-def parse_user_data(file_path):
+def parse_user_data(file_path, mode):
+    """
+    Parses user data from the Excel file based on the selected mode.
+    """
     required_sheet = 'Sheet1'
+    lvc_users, standard_users = [], []
+
     try:
         xls = pd.ExcelFile(file_path)
     except FileNotFoundError:
@@ -283,22 +287,28 @@ def parse_user_data(file_path):
     if required_sheet not in xls.sheet_names:
         raise ValueError(f"A required sheet named '{required_sheet}' was not found in the Excel file.")
     df = pd.read_excel(file_path, sheet_name=required_sheet, header=None)
-    lvc_df = df.iloc[:, 0:3].copy()
-    lvc_df.columns = lvc_df.iloc[0]
-    lvc_df = lvc_df[1:].reset_index(drop=True)
-    lvc_df.rename(columns={'LVC Currency': 'Currency'}, inplace=True)
-    lvc_df.dropna(subset=['Currency'], inplace=True)
-    standard_df = df.iloc[:, 4:7].copy()
-    standard_df.columns = standard_df.iloc[0]
-    standard_df = standard_df[1:].reset_index(drop=True)
-    standard_df.dropna(subset=['Currency'], inplace=True)
+    
     required_columns = ['Currency', 'Username', 'Postfix']
-    if not all(col in lvc_df.columns for col in required_columns):
-        raise ValueError("The LVC section (Columns A-C) is missing required headers: 'LVC Currency', 'Username', 'Postfix'.")
-    if not all(col in standard_df.columns for col in required_columns):
-        raise ValueError("The Standard section (Columns E-G) is missing required headers: 'Currency', 'Username', 'Postfix'.")
-    lvc_users = lvc_df.to_dict('records')
-    standard_users = standard_df.to_dict('records')
+
+    if mode in ["all", "lvc_only"]:
+        lvc_df = df.iloc[:, 0:3].copy()
+        lvc_df.columns = lvc_df.iloc[0]
+        lvc_df = lvc_df[1:].reset_index(drop=True)
+        lvc_df.rename(columns={'LVC Currency': 'Currency'}, inplace=True)
+        lvc_df.dropna(subset=['Currency'], inplace=True)
+        if not all(col in lvc_df.columns for col in required_columns):
+            raise ValueError("The LVC section (Columns A-C) is missing required headers: 'LVC Currency', 'Username', 'Postfix'.")
+        lvc_users = lvc_df.to_dict('records')
+
+    if mode in ["all", "standard_only"]:
+        standard_df = df.iloc[:, 4:7].copy()
+        standard_df.columns = standard_df.iloc[0]
+        standard_df = standard_df[1:].reset_index(drop=True)
+        standard_df.dropna(subset=['Currency'], inplace=True)
+        if not all(col in standard_df.columns for col in required_columns):
+            raise ValueError("The Standard section (Columns E-G) is missing required headers: 'Currency', 'Username', 'Postfix'.")
+        standard_users = standard_df.to_dict('records')
+        
     return lvc_users, standard_users
 
 def parse_credentials_file(file_path):
@@ -309,6 +319,14 @@ def parse_credentials_file(file_path):
     email = lines[0].strip()
     password = lines[1].strip()
     return email, password
+
+def parse_gtp_list_file(file_path):
+    """Reads and validates the GTP list from a JSON file."""
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+    if not isinstance(data, dict) or not data:
+        raise ValueError("GTP list file must contain a non-empty JSON object.")
+    return data
 
 def update_excel_with_lvc_names(file_path, migrated_user):
     """
@@ -340,7 +358,7 @@ class AutomationWorker(QObject):
     automation_error = pyqtSignal(str)
     automation_finished = pyqtSignal()
 
-    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, debug_mode):
+    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode):
         super().__init__()
         self.gtp_url = gtp_url
         self.email = email
@@ -349,7 +367,7 @@ class AutomationWorker(QObject):
         self.standard_users = standard_users
         self.user_password = user_password
         self.user_data_path = user_data_path
-        self.debug_mode = debug_mode
+        self.mode = mode
         self.is_running = True
         self.driver = None
 
@@ -357,8 +375,6 @@ class AutomationWorker(QObject):
         self.driver = BrowserDriver(progress_callback=self.progress_update.emit)
         try:
             self.progress_update.emit("Automation thread started.")
-            if self.debug_mode:
-                self.progress_update.emit("--- DEBUG MODE ENABLED: Processing first LVC user only. ---")
             if not self.is_running: return
 
             self.driver.launch()
@@ -367,45 +383,41 @@ class AutomationWorker(QObject):
             self.driver.login(self.gtp_url, self.email, self.password)
             if not self.is_running: return
             
-            lvc_users_to_process = self.lvc_users[:1] if self.debug_mode else self.lvc_users
-            standard_users_to_process = self.standard_users[:1] if self.debug_mode and not self.lvc_users else self.standard_users
+            # --- LVC User Processing ---
+            if self.mode in ["all", "lvc_only"]:
+                self.progress_update.emit("\n--- STEP A: Creating LVC User Accounts ---")
+                created_lvc_users = []
+                if self.lvc_users:
+                    self.driver.navigate_to_create_user_page(self.gtp_url)
+                    for user in self.lvc_users:
+                        if not self.is_running: break
+                        success = self.driver.fill_user_creation_form(user, self.user_password)
+                        if success:
+                            created_lvc_users.append(user)
+                if not self.is_running: return
 
-            # == STEP A: Create all LVC user accounts ==
-            self.progress_update.emit("\n--- STEP A: Creating LVC User Accounts ---")
-            created_lvc_users = []
-            if lvc_users_to_process:
-                self.driver.navigate_to_create_user_page(self.gtp_url)
-                for user in lvc_users_to_process:
+                self.progress_update.emit("\n--- STEP B: Migrating Users to LVC ---")
+                for user in created_lvc_users:
                     if not self.is_running: break
-                    success = self.driver.fill_user_creation_form(user, self.user_password)
-                    if success:
-                        created_lvc_users.append(user)
-            if not self.is_running: return
+                    initial_username = f"{user['Username']}{user['Postfix']}"
+                    self.driver.migrate_user_to_lvc(self.gtp_url, initial_username)
+                    update_excel_with_lvc_names(self.user_data_path, user)
+                if not self.is_running: return
 
-            # == STEP B: Migrate all recently created users to LVC ==
-            self.progress_update.emit("\n--- STEP B: Migrating Users to LVC ---")
-            for user in created_lvc_users:
-                if not self.is_running: break
-                initial_username = f"{user['Username']}{user['Postfix']}"
-                self.driver.migrate_user_to_lvc(self.gtp_url, initial_username)
-                update_excel_with_lvc_names(self.user_data_path, user)
-            if not self.is_running: return
+                self.progress_update.emit("\n--- STEP C: Adding Balance to LVC Users ---")
+                for user in created_lvc_users:
+                    if not self.is_running: break
+                    lvc_username = f"LVC_{user['Username']}{user['Postfix']}"
+                    self.driver.add_balance_to_user(self.gtp_url, lvc_username, "9999999999999")
+                if not self.is_running: return
 
-            # == STEP C: Add balance to all migrated LVC users ==
-            self.progress_update.emit("\n--- STEP C: Adding Balance to LVC Users ---")
-            for user in created_lvc_users:
-                if not self.is_running: break
-                lvc_username = f"LVC_{user['Username']}{user['Postfix']}"
-                self.driver.add_balance_to_user(self.gtp_url, lvc_username, "9999999999999")
-            if not self.is_running: return
-
-            # --- Process Standard Users if not in debug mode ---
-            if not self.debug_mode:
+            # --- Standard User Processing ---
+            if self.mode in ["all", "standard_only"]:
                 self.progress_update.emit("\n--- Creating Standard User Accounts ---")
                 created_standard_users = []
-                if standard_users_to_process:
+                if self.standard_users:
                     self.driver.navigate_to_create_user_page(self.gtp_url)
-                    for user in standard_users_to_process:
+                    for user in self.standard_users:
                         if not self.is_running: break
                         success = self.driver.fill_user_creation_form(user, self.user_password)
                         if success:
@@ -448,21 +460,14 @@ class AutomationWorker(QObject):
 # Main Application Window (UI)
 # =============================================================================
 class MainWindow(QMainWindow):
-    GTP_VERSIONS = {
-        "GTP 554": "https://admin-app1-gtp554.installprogram.eu",
-        "GTP 640": "https://admin-app1-gtp640.installprogram.eu",
-        "GTP 642": "https://admin-app1-gtp642.installprogram.eu",
-        "GTP 643": "https://admin-app1-gtp643.installprogram.eu",
-        "GTP 644": "https://admin-app1-gtp644.installprogram.eu",
-    }
-
     def __init__(self):
         super().__init__()
         self.automation_thread = None
         self.worker = None
         self.config = {}
+        self.GTP_VERSIONS = {}
         self.setWindowTitle("GTP User Automation Tool v1.0")
-        self.setGeometry(100, 100, 700, 550)
+        self.setGeometry(100, 100, 700, 600)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
@@ -475,13 +480,22 @@ class MainWindow(QMainWindow):
         self.setup_ui_elements(header_font)
         self.setup_connections()
         self.apply_config()
+        self.check_start_button_state()
 
     def setup_ui_elements(self, header_font):
         config_header = QLabel("1. GTP Configuration")
         config_header.setFont(header_font)
         self.main_layout.addWidget(config_header)
+
+        gtp_layout = QHBoxLayout()
+        self.select_gtp_list_button = QPushButton("Select GTP List File (.json)")
+        self.gtp_list_path_label = QLabel("No file selected.")
+        self.gtp_list_path_label.setStyleSheet("font-style: italic; color: #555;")
+        gtp_layout.addWidget(self.select_gtp_list_button)
+        gtp_layout.addWidget(self.gtp_list_path_label, 1)
+        self.main_layout.addLayout(gtp_layout)
+
         self.gtp_dropdown = QComboBox()
-        self.gtp_dropdown.addItems(self.GTP_VERSIONS.keys())
         self.main_layout.addWidget(self.gtp_dropdown)
         
         login_header = QLabel("2. File & Password Selection")
@@ -504,14 +518,24 @@ class MainWindow(QMainWindow):
         user_layout.addWidget(self.user_file_path_label, 1)
         self.main_layout.addLayout(user_layout)
         
-        user_pass_label = QLabel("Default Password for New User Accounts:")
+        user_pass_label = QLabel("Password for New User Accounts:")
         self.main_layout.addWidget(user_pass_label)
         self.user_password_input = QLineEdit()
         self.user_password_input.setText("snow")
         self.main_layout.addWidget(self.user_password_input)
 
-        self.debug_mode_checkbox = QCheckBox("Debug Mode (Process first LVC user only)")
-        self.main_layout.addWidget(self.debug_mode_checkbox)
+        # --- MODIFIED: Replaced checkbox with radio buttons ---
+        mode_groupbox = QGroupBox("Processing Mode")
+        mode_layout = QHBoxLayout()
+        self.radio_all = QRadioButton("LVC + Standard Currency")
+        self.radio_lvc = QRadioButton("Only LVC")
+        self.radio_standard = QRadioButton("Only Standard Currency")
+        self.radio_all.setChecked(True) # Default selection
+        mode_layout.addWidget(self.radio_all)
+        mode_layout.addWidget(self.radio_lvc)
+        mode_layout.addWidget(self.radio_standard)
+        mode_groupbox.setLayout(mode_layout)
+        self.main_layout.addWidget(mode_groupbox)
         
         self.start_button = QPushButton("Start Automation")
         self.start_button.setStyleSheet(
@@ -528,6 +552,7 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.status_log)
 
     def setup_connections(self):
+        self.select_gtp_list_button.clicked.connect(self.select_gtp_list_file)
         self.select_cred_button.clicked.connect(self.select_credentials_file)
         self.select_user_file_button.clicked.connect(self.select_user_data_file)
         self.start_button.clicked.connect(self.start_automation)
@@ -538,15 +563,13 @@ class MainWindow(QMainWindow):
         cred_path = self.cred_path_label.text()
         user_data_path = self.user_file_path_label.text()
         user_password = self.user_password_input.text()
-        debug_mode = self.debug_mode_checkbox.isChecked()
-
-        errors = []
-        if "No file selected" in cred_path: errors.append("You must select a credentials file.")
-        if "No file selected" in user_data_path: errors.append("You must select a user data file.")
-        if not user_password: errors.append("The password for new users cannot be empty.")
-        if errors:
-            QMessageBox.warning(self, "Input Error", "\n".join(errors))
-            return
+        
+        # --- MODIFIED: Get selected processing mode ---
+        mode = "all"
+        if self.radio_lvc.isChecked():
+            mode = "lvc_only"
+        elif self.radio_standard.isChecked():
+            mode = "standard_only"
 
         self.log_message("="*50)
         self.log_message("Starting pre-flight checks...")
@@ -557,8 +580,8 @@ class MainWindow(QMainWindow):
             self.log_message("  - Credentials parsed successfully.")
             
             self.log_message(f"Parsing user data file: {user_data_path}")
-            lvc_users, standard_users = parse_user_data(user_data_path)
-            self.log_message(f"  - Validation successful: Found {len(lvc_users)} LVC and {len(standard_users)} Standard users.")
+            lvc_users, standard_users = parse_user_data(user_data_path, mode)
+            self.log_message(f"  - Validation successful: Found {len(lvc_users)} LVC and {len(standard_users)} Standard users for mode '{mode}'.")
         except Exception as e:
             print("--- A FILE PARSING ERROR OCCURRED ---")
             traceback.print_exc()
@@ -572,7 +595,7 @@ class MainWindow(QMainWindow):
         self.toggle_controls(False)
 
         self.automation_thread = QThread()
-        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, debug_mode)
+        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode)
         self.worker.moveToThread(self.automation_thread)
 
         self.worker.progress_update.connect(self.log_message)
@@ -596,6 +619,11 @@ class MainWindow(QMainWindow):
         self.automation_thread = None
         self.worker = None
 
+    def select_gtp_list_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select GTP List File", "", "JSON Files (*.json)")
+        if file_path:
+            self.load_gtp_list_from_path(file_path)
+
     def select_credentials_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Credentials File", "", "Text Files (*.txt)")
         if file_path:
@@ -604,6 +632,7 @@ class MainWindow(QMainWindow):
             self.log_message(f"Selected credentials file: {file_path}")
             self.config['credentials_path'] = file_path
             self.save_config()
+            self.check_start_button_state()
 
     def select_user_data_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select User Data File", "", "Excel Files (*.xlsx *.xls)")
@@ -613,6 +642,23 @@ class MainWindow(QMainWindow):
             self.log_message(f"Selected user data file: {file_path}")
             self.config['user_data_path'] = file_path
             self.save_config()
+            self.check_start_button_state()
+            
+    def load_gtp_list_from_path(self, file_path):
+        try:
+            self.GTP_VERSIONS = parse_gtp_list_file(file_path)
+            self.gtp_dropdown.clear()
+            self.gtp_dropdown.addItems(self.GTP_VERSIONS.keys())
+            self.gtp_list_path_label.setText(file_path)
+            self.gtp_list_path_label.setStyleSheet("font-style: normal; color: #000;")
+            self.log_message(f"Successfully loaded {len(self.GTP_VERSIONS)} GTP versions.")
+            self.config['gtp_list_path'] = file_path
+            self.save_config()
+        except Exception as e:
+            self.GTP_VERSIONS = {}
+            self.gtp_dropdown.clear()
+            QMessageBox.critical(self, "File Error", f"Failed to load GTP list file.\n\nError: {e}")
+        self.check_start_button_state()
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -627,6 +673,10 @@ class MainWindow(QMainWindow):
 
     def apply_config(self):
         """Applies loaded configuration to the UI."""
+        gtp_path = self.config.get('gtp_list_path')
+        if gtp_path and os.path.exists(gtp_path):
+            self.load_gtp_list_from_path(gtp_path)
+
         cred_path = self.config.get('credentials_path')
         if cred_path and os.path.exists(cred_path):
             self.cred_path_label.setText(cred_path)
@@ -637,16 +687,30 @@ class MainWindow(QMainWindow):
             self.user_file_path_label.setText(user_data_path)
             self.user_file_path_label.setStyleSheet("font-style: normal; color: #000;")
 
+    def check_start_button_state(self):
+        """Enables the start button only if all required files are selected."""
+        gtp_loaded = bool(self.GTP_VERSIONS)
+        creds_loaded = "No file selected" not in self.cred_path_label.text()
+        users_loaded = "No file selected" not in self.user_file_path_label.text()
+        
+        if gtp_loaded and creds_loaded and users_loaded:
+            self.start_button.setEnabled(True)
+        else:
+            self.start_button.setEnabled(False)
+
     def log_message(self, message):
         self.status_log.append(message)
 
     def toggle_controls(self, enabled):
         self.gtp_dropdown.setEnabled(enabled)
+        self.select_gtp_list_button.setEnabled(enabled)
         self.select_cred_button.setEnabled(enabled)
         self.select_user_file_button.setEnabled(enabled)
         self.user_password_input.setEnabled(enabled)
         self.start_button.setEnabled(enabled)
-        self.debug_mode_checkbox.setEnabled(enabled)
+        self.radio_all.setEnabled(enabled)
+        self.radio_lvc.setEnabled(enabled)
+        self.radio_standard.setEnabled(enabled)
         
     def closeEvent(self, event):
         self.save_config() # Save config on close

@@ -288,16 +288,18 @@ def parse_user_data(file_path, mode):
         raise ValueError(f"A required sheet named '{required_sheet}' was not found in the Excel file.")
     df = pd.read_excel(file_path, sheet_name=required_sheet, header=None)
     
-    required_columns = ['Currency', 'Username', 'Postfix']
+    # --- MODIFIED: Updated column requirements ---
+    lvc_required_columns = ['LVC Currency', 'Username', 'Postfix', 'LVC_username']
+    standard_required_columns = ['Currency', 'Username', 'Postfix']
 
     if mode in ["all", "lvc_only"]:
-        lvc_df = df.iloc[:, 0:3].copy()
+        lvc_df = df.iloc[:, 0:4].copy() # Read 4 columns
         lvc_df.columns = lvc_df.iloc[0]
         lvc_df = lvc_df[1:].reset_index(drop=True)
+        lvc_df.dropna(subset=['LVC Currency'], inplace=True)
+        if not all(col in lvc_df.columns for col in lvc_required_columns):
+            raise ValueError(f"The LVC section (Columns A-D) is missing required headers: {', '.join(lvc_required_columns)}.")
         lvc_df.rename(columns={'LVC Currency': 'Currency'}, inplace=True)
-        lvc_df.dropna(subset=['Currency'], inplace=True)
-        if not all(col in lvc_df.columns for col in required_columns):
-            raise ValueError("The LVC section (Columns A-C) is missing required headers: 'LVC Currency', 'Username', 'Postfix'.")
         lvc_users = lvc_df.to_dict('records')
 
     if mode in ["all", "standard_only"]:
@@ -305,8 +307,8 @@ def parse_user_data(file_path, mode):
         standard_df.columns = standard_df.iloc[0]
         standard_df = standard_df[1:].reset_index(drop=True)
         standard_df.dropna(subset=['Currency'], inplace=True)
-        if not all(col in standard_df.columns for col in required_columns):
-            raise ValueError("The Standard section (Columns E-G) is missing required headers: 'Currency', 'Username', 'Postfix'.")
+        if not all(col in standard_df.columns for col in standard_required_columns):
+            raise ValueError(f"The Standard section (Columns E-G) is missing required headers: {', '.join(standard_required_columns)}.")
         standard_users = standard_df.to_dict('records')
         
     return lvc_users, standard_users
@@ -330,22 +332,29 @@ def parse_gtp_list_file(file_path):
 
 def update_excel_with_lvc_names(file_path, migrated_user):
     """
-    Updates the original Excel file with the new LVC prefixed username.
+    Updates the LVC_username column in the original Excel file.
     """
     try:
-        with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-            df = pd.read_excel(file_path, sheet_name='Sheet1', header=None)
+        df = pd.read_excel(file_path, sheet_name='Sheet1', header=0)
+        
+        original_username = migrated_user['Username']
+        original_currency = migrated_user['Currency']
+        lvc_username = f"LVC_{original_username}{migrated_user['Postfix']}"
+
+        # Find the index of the row to update
+        match_condition = (df['LVC Currency'] == original_currency) & (df['Username'] == original_username)
+        row_index = df.index[match_condition].tolist()
+
+        if row_index:
+            # Update the 'LVC_username' column for that specific row
+            df.loc[row_index[0], 'LVC_username'] = lvc_username
             
-            original_username = migrated_user['Username']
-            original_currency = migrated_user['Currency']
-            
-            for index, row in df.iterrows():
-                if row[0] == original_currency and row[1] == original_username:
-                    df.at[index, 1] = f"LVC_{original_username}"
-                    break
-            
-            df.to_excel(writer, sheet_name='Sheet1', index=False, header=False)
-            print(f"Successfully updated username for {original_username} in {file_path}")
+            # Save the entire dataframe back to the Excel file
+            df.to_excel(file_path, sheet_name='Sheet1', index=False)
+            print(f"Successfully updated LVC_username for {original_username} in {file_path}")
+        else:
+            print(f"[WARNING] Could not find user {original_username} to update in Excel file.")
+
     except Exception as e:
         print(f"Error updating Excel file: {e}")
 
@@ -524,13 +533,12 @@ class MainWindow(QMainWindow):
         self.user_password_input.setText("snow")
         self.main_layout.addWidget(self.user_password_input)
 
-        # --- MODIFIED: Replaced checkbox with radio buttons ---
         mode_groupbox = QGroupBox("Processing Mode")
         mode_layout = QHBoxLayout()
         self.radio_all = QRadioButton("LVC + Standard Currency")
         self.radio_lvc = QRadioButton("Only LVC")
         self.radio_standard = QRadioButton("Only Standard Currency")
-        self.radio_all.setChecked(True) # Default selection
+        self.radio_all.setChecked(True)
         mode_layout.addWidget(self.radio_all)
         mode_layout.addWidget(self.radio_lvc)
         mode_layout.addWidget(self.radio_standard)
@@ -564,7 +572,6 @@ class MainWindow(QMainWindow):
         user_data_path = self.user_file_path_label.text()
         user_password = self.user_password_input.text()
         
-        # --- MODIFIED: Get selected processing mode ---
         mode = "all"
         if self.radio_lvc.isChecked():
             mode = "lvc_only"

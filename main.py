@@ -13,6 +13,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal
 
 from playwright.sync_api import sync_playwright, Page, expect
+from openpyxl import load_workbook
 
 CONFIG_FILE = "config.json"
 
@@ -286,29 +287,28 @@ def parse_user_data(file_path, mode):
         raise IOError(f"The file at {file_path} could not be opened or is corrupted. Details: {e}")
     if required_sheet not in xls.sheet_names:
         raise ValueError(f"A required sheet named '{required_sheet}' was not found in the Excel file.")
-    df = pd.read_excel(file_path, sheet_name=required_sheet, header=None)
     
-    # --- MODIFIED: Updated column requirements ---
-    lvc_required_columns = ['LVC Currency', 'Username', 'Postfix', 'LVC_username']
-    standard_required_columns = ['Currency', 'Username', 'Postfix']
+    # --- MODIFIED: More robust positional reading and case-insensitive header checking ---
+    
+    lvc_required_columns = ['lvc currency', 'username', 'postfix', 'lvc_username']
+    standard_required_columns = ['std_currency', 'std_username', 'std_postfix']
 
     if mode in ["all", "lvc_only"]:
-        lvc_df = df.iloc[:, 0:4].copy() # Read 4 columns
-        lvc_df.columns = lvc_df.iloc[0]
-        lvc_df = lvc_df[1:].reset_index(drop=True)
-        lvc_df.dropna(subset=['LVC Currency'], inplace=True)
+        lvc_df = pd.read_excel(file_path, sheet_name=required_sheet, header=0, usecols="A:D", dtype={'Postfix': str})
+        lvc_df.columns = [str(col).strip().lower() for col in lvc_df.columns]
         if not all(col in lvc_df.columns for col in lvc_required_columns):
-            raise ValueError(f"The LVC section (Columns A-D) is missing required headers: {', '.join(lvc_required_columns)}.")
-        lvc_df.rename(columns={'LVC Currency': 'Currency'}, inplace=True)
+            raise ValueError(f"The LVC section (Columns A-D) is missing required headers: LVC Currency, Username, Postfix, LVC_username.")
+        lvc_df.rename(columns={'lvc currency': 'Currency', 'username': 'Username', 'postfix': 'Postfix', 'lvc_username': 'LVC_username'}, inplace=True)
+        lvc_df.dropna(subset=['Currency'], inplace=True)
         lvc_users = lvc_df.to_dict('records')
 
     if mode in ["all", "standard_only"]:
-        standard_df = df.iloc[:, 4:7].copy()
-        standard_df.columns = standard_df.iloc[0]
-        standard_df = standard_df[1:].reset_index(drop=True)
-        standard_df.dropna(subset=['Currency'], inplace=True)
+        standard_df = pd.read_excel(file_path, sheet_name=required_sheet, header=0, usecols="E:G", dtype={'Postfix': str})
+        standard_df.columns = [str(col).strip().lower() for col in standard_df.columns]
         if not all(col in standard_df.columns for col in standard_required_columns):
-            raise ValueError(f"The Standard section (Columns E-G) is missing required headers: {', '.join(standard_required_columns)}.")
+            raise ValueError(f"The Standard section (Columns E-G) is missing required headers: std_currency, std_username, std_postfix.")
+        standard_df.rename(columns={'std_currency': 'Currency', 'std_username': 'Username', 'std_postfix': 'Postfix'}, inplace=True)
+        standard_df.dropna(subset=['Currency'], inplace=True)
         standard_users = standard_df.to_dict('records')
         
     return lvc_users, standard_users
@@ -332,28 +332,25 @@ def parse_gtp_list_file(file_path):
 
 def update_excel_with_lvc_names(file_path, migrated_user):
     """
-    Updates the LVC_username column in the original Excel file.
+    Updates the LVC_username column in the original Excel file using openpyxl.
     """
     try:
-        df = pd.read_excel(file_path, sheet_name='Sheet1', header=0)
+        workbook = load_workbook(filename=file_path)
+        sheet = workbook['Sheet1']
         
         original_username = migrated_user['Username']
         original_currency = migrated_user['Currency']
         lvc_username = f"LVC_{original_username}{migrated_user['Postfix']}"
 
-        # Find the index of the row to update
-        match_condition = (df['LVC Currency'] == original_currency) & (df['Username'] == original_username)
-        row_index = df.index[match_condition].tolist()
-
-        if row_index:
-            # Update the 'LVC_username' column for that specific row
-            df.loc[row_index[0], 'LVC_username'] = lvc_username
-            
-            # Save the entire dataframe back to the Excel file
-            df.to_excel(file_path, sheet_name='Sheet1', index=False)
-            print(f"Successfully updated LVC_username for {original_username} in {file_path}")
-        else:
-            print(f"[WARNING] Could not find user {original_username} to update in Excel file.")
+        # Find the row to update by matching currency and original username
+        for row in range(2, sheet.max_row + 1): # Start from row 2 to skip header
+            if sheet.cell(row=row, column=1).value == original_currency and sheet.cell(row=row, column=2).value == original_username:
+                # Update the LVC_username column (column D)
+                sheet.cell(row=row, column=4).value = lvc_username
+                break
+        
+        workbook.save(filename=file_path)
+        print(f"Successfully updated LVC_username for {original_username} in {file_path}")
 
     except Exception as e:
         print(f"Error updating Excel file: {e}")

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog,
     QMessageBox, QCheckBox, QRadioButton, QGroupBox
 )
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIntValidator
 from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal
 
 from playwright.sync_api import sync_playwright, Page, expect
@@ -299,6 +299,7 @@ def parse_user_data(file_path, mode):
         if not all(col in lvc_df.columns for col in lvc_required_columns):
             raise ValueError(f"The LVC section (Columns A-D) is missing required headers: LVC Currency, Username, Postfix, LVC_username.")
         lvc_df.rename(columns={'lvc currency': 'Currency', 'username': 'Username', 'postfix': 'Postfix', 'lvc_username': 'LVC_username'}, inplace=True)
+        lvc_df['Postfix'] = lvc_df['Postfix'].fillna('')
         lvc_df.dropna(subset=['Currency'], inplace=True)
         lvc_users = lvc_df.to_dict('records')
 
@@ -308,6 +309,7 @@ def parse_user_data(file_path, mode):
         if not all(col in standard_df.columns for col in standard_required_columns):
             raise ValueError(f"The Standard section (Columns E-G) is missing required headers: std_currency, std_username, std_postfix.")
         standard_df.rename(columns={'std_currency': 'Currency', 'std_username': 'Username', 'std_postfix': 'Postfix'}, inplace=True)
+        standard_df['Postfix'] = standard_df['Postfix'].fillna('')
         standard_df.dropna(subset=['Currency'], inplace=True)
         standard_users = standard_df.to_dict('records')
         
@@ -364,7 +366,7 @@ class AutomationWorker(QObject):
     automation_error = pyqtSignal(str)
     automation_finished = pyqtSignal()
 
-    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode):
+    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode, lvc_balance, standard_balance):
         super().__init__()
         self.gtp_url = gtp_url
         self.email = email
@@ -374,6 +376,8 @@ class AutomationWorker(QObject):
         self.user_password = user_password
         self.user_data_path = user_data_path
         self.mode = mode
+        self.lvc_balance = lvc_balance
+        self.standard_balance = standard_balance
         self.is_running = True
         self.driver = None
 
@@ -414,7 +418,7 @@ class AutomationWorker(QObject):
                 for user in created_lvc_users:
                     if not self.is_running: break
                     lvc_username = f"LVC_{user['Username']}{user['Postfix']}"
-                    self.driver.add_balance_to_user(self.gtp_url, lvc_username, "9999999999999")
+                    self.driver.add_balance_to_user(self.gtp_url, lvc_username, self.lvc_balance)
                 if not self.is_running: return
 
             # --- Standard User Processing ---
@@ -434,7 +438,7 @@ class AutomationWorker(QObject):
                 for user in created_standard_users:
                     if not self.is_running: break
                     standard_username = f"{user['Username']}{user['Postfix']}"
-                    self.driver.add_balance_to_user(self.gtp_url, standard_username, "9999999")
+                    self.driver.add_balance_to_user(self.gtp_url, standard_username, self.standard_balance)
 
             if self.is_running:
                 self.progress_update.emit("\nAutomation complete!")
@@ -472,8 +476,8 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.config = {}
         self.GTP_VERSIONS = {}
-        self.setWindowTitle("GTP User Automation Tool v1.0")
-        self.setGeometry(100, 100, 700, 600)
+        self.setWindowTitle("GTP User Automation Tool v1.1")
+        self.setGeometry(100, 100, 700, 650)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
@@ -530,6 +534,34 @@ class MainWindow(QMainWindow):
         self.user_password_input.setText("snow")
         self.main_layout.addWidget(self.user_password_input)
 
+        # --- NEW: Balance Amount Inputs ---
+        balance_groupbox = QGroupBox("Balance Amounts")
+        balance_layout = QVBoxLayout()
+        
+        lvc_balance_layout = QHBoxLayout()
+        lvc_balance_label = QLabel("Balance for LVC user:")
+        self.lvc_balance_input = QLineEdit()
+        self.lvc_balance_input.setText("7000000000000")
+        self.lvc_balance_input.setMaxLength(13)
+        # self.lvc_balance_input.setValidator(QIntValidator(0, 9999999999999)) # This line caused the error
+        lvc_balance_layout.addWidget(lvc_balance_label)
+        lvc_balance_layout.addWidget(self.lvc_balance_input)
+        balance_layout.addLayout(lvc_balance_layout)
+
+        standard_balance_layout = QHBoxLayout()
+        standard_balance_label = QLabel("Balance for Standard user:")
+        self.standard_balance_input = QLineEdit()
+        self.standard_balance_input.setText("9999999")
+        self.standard_balance_input.setMaxLength(7)
+        self.standard_balance_input.setValidator(QIntValidator(0, 9999999))
+        standard_balance_layout.addWidget(standard_balance_label)
+        standard_balance_layout.addWidget(self.standard_balance_input)
+        balance_layout.addLayout(standard_balance_layout)
+        
+        balance_groupbox.setLayout(balance_layout)
+        self.main_layout.addWidget(balance_groupbox)
+
+
         mode_groupbox = QGroupBox("Processing Mode")
         mode_layout = QHBoxLayout()
         self.radio_all = QRadioButton("LVC + Standard Currency")
@@ -568,6 +600,8 @@ class MainWindow(QMainWindow):
         cred_path = self.cred_path_label.text()
         user_data_path = self.user_file_path_label.text()
         user_password = self.user_password_input.text()
+        lvc_balance = self.lvc_balance_input.text()
+        standard_balance = self.standard_balance_input.text()
         
         mode = "all"
         if self.radio_lvc.isChecked():
@@ -575,9 +609,19 @@ class MainWindow(QMainWindow):
         elif self.radio_standard.isChecked():
             mode = "standard_only"
 
+        errors = []
+        if "No file selected" in cred_path: errors.append("You must select a credentials file.")
+        if "No file selected" in user_data_path: errors.append("You must select a user data file.")
+        if not user_password: errors.append("The password for new users cannot be empty.")
+        if not lvc_balance.isdigit() or not standard_balance.isdigit():
+            errors.append("Balance amounts must be valid numbers.")
+        if errors:
+            QMessageBox.warning(self, "Input Error", "\n".join(errors))
+            return
+
         self.log_message("="*50)
         self.log_message("Starting pre-flight checks...")
-        
+
         try:
             self.log_message(f"Parsing credentials file: {cred_path}")
             email, password = parse_credentials_file(cred_path)
@@ -599,7 +643,7 @@ class MainWindow(QMainWindow):
         self.toggle_controls(False)
 
         self.automation_thread = QThread()
-        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode)
+        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode, lvc_balance, standard_balance)
         self.worker.moveToThread(self.automation_thread)
 
         self.worker.progress_update.connect(self.log_message)
@@ -711,6 +755,8 @@ class MainWindow(QMainWindow):
         self.select_cred_button.setEnabled(enabled)
         self.select_user_file_button.setEnabled(enabled)
         self.user_password_input.setEnabled(enabled)
+        self.lvc_balance_input.setEnabled(enabled)
+        self.standard_balance_input.setEnabled(enabled)
         self.start_button.setEnabled(enabled)
         self.radio_all.setEnabled(enabled)
         self.radio_lvc.setEnabled(enabled)
@@ -732,3 +778,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

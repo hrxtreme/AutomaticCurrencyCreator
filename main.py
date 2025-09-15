@@ -4,6 +4,7 @@ import pandas as pd
 import traceback
 import json
 import os
+import logging
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QComboBox, QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog,
@@ -16,6 +17,20 @@ from playwright.sync_api import sync_playwright, Page, expect
 from openpyxl import load_workbook
 
 CONFIG_FILE = "config.json"
+LOG_FILE = "automation_log.txt"
+
+# =============================================================================
+# Logging Setup
+# =============================================================================
+def setup_logging():
+    """Sets up logging to a file."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(message)s',
+        filename=LOG_FILE,
+        filemode='w'  # Overwrite the log file on each run
+    )
+setup_logging()
 
 # =============================================================================
 # Browser Driver Class
@@ -102,9 +117,13 @@ class BrowserDriver:
         self.page.goto(create_url, timeout=60000)
         self.wait_for_page_to_settle()
 
-    def fill_user_creation_form(self, user_details, user_password):
-        username = f"{user_details['Username']}{user_details['Postfix']}"
-        currency_code = str(user_details['Currency']).split(' ')[0]
+    def fill_user_creation_form(self, user_details, user_password, postfix):
+        username = f"{user_details['Username']}{postfix}"
+        
+        # --- MODIFIED: More robust currency code extraction from username ---
+        username_from_file = str(user_details['Username'])
+        # Assuming the currency code is the first 3 letters of the username string (e.g., "KRWx" -> "KRW")
+        currency_code = username_from_file[:3]
 
         self.progress_callback(f"--- Creating user account: {username} ---")
 
@@ -134,6 +153,7 @@ class BrowserDriver:
         currency_dropdown_button = self.page.locator('//div[9]//div[1]//div[1]//input[1]')
         expect(currency_dropdown_button).to_be_visible(timeout=15000)
         currency_dropdown_button.click()
+        # --- MODIFIED: Use the unique currency code to find the currency in the dropdown ---
         self.page.locator(f"span:has-text('({currency_code})')").click()
         
         self.progress_callback("  - Clicking 'Create Account'...")
@@ -274,44 +294,79 @@ class BrowserDriver:
 # =============================================================================
 def parse_user_data(file_path, mode):
     """
-    Parses user data from the Excel file based on the selected mode.
+    Parses user data from an Excel or JSON file based on the selected mode.
     """
-    required_sheet = 'Sheet1'
     lvc_users, standard_users = [], []
+    file_extension = os.path.splitext(file_path)[1].lower()
 
-    try:
-        xls = pd.ExcelFile(file_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"The file could not be found at the path: {file_path}")
-    except Exception as e:
-        raise IOError(f"The file at {file_path} could not be opened or is corrupted. Details: {e}")
-    if required_sheet not in xls.sheet_names:
-        raise ValueError(f"A required sheet named '{required_sheet}' was not found in the Excel file.")
-    
-    # --- MODIFIED: More robust positional reading and case-insensitive header checking ---
-    
-    lvc_required_columns = ['lvc currency', 'username', 'postfix', 'lvc_username']
-    standard_required_columns = ['std_currency', 'std_username', 'std_postfix']
+    if file_extension in ['.xlsx', '.xls']:
+        # --- Excel Parsing Logic ---
+        required_sheet = 'Sheet1'
+        try:
+            xls = pd.ExcelFile(file_path)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"The file could not be found at the path: {file_path}")
+        except Exception as e:
+            raise IOError(f"The file at {file_path} could not be opened or is corrupted. Details: {e}")
+        if required_sheet not in xls.sheet_names:
+            raise ValueError(f"A required sheet named '{required_sheet}' was not found in the Excel file.")
+        
+        lvc_required_columns = ['lvc currency', 'username', 'lvc_username']
+        standard_required_columns = ['std_currency', 'std_username']
 
-    if mode in ["all", "lvc_only"]:
-        lvc_df = pd.read_excel(file_path, sheet_name=required_sheet, header=0, usecols="A:D", dtype={'Postfix': str})
-        lvc_df.columns = [str(col).strip().lower() for col in lvc_df.columns]
-        if not all(col in lvc_df.columns for col in lvc_required_columns):
-            raise ValueError(f"The LVC section (Columns A-D) is missing required headers: LVC Currency, Username, Postfix, LVC_username.")
-        lvc_df.rename(columns={'lvc currency': 'Currency', 'username': 'Username', 'postfix': 'Postfix', 'lvc_username': 'LVC_username'}, inplace=True)
-        lvc_df['Postfix'] = lvc_df['Postfix'].fillna('')
-        lvc_df.dropna(subset=['Currency'], inplace=True)
-        lvc_users = lvc_df.to_dict('records')
+        if mode in ["all", "lvc_only"]:
+            lvc_df = pd.read_excel(file_path, sheet_name=required_sheet, header=0, usecols="A,B,D")
+            lvc_df.columns = [str(col).strip().lower() for col in lvc_df.columns]
+            if not all(col in lvc_df.columns for col in lvc_required_columns):
+                raise ValueError(f"The LVC section is missing required headers: LVC Currency, Username, LVC_username.")
+            lvc_df.rename(columns={'lvc currency': 'Currency', 'username': 'Username', 'lvc_username': 'LVC_username'}, inplace=True)
+            lvc_df.dropna(subset=['Currency'], inplace=True)
+            lvc_users = lvc_df.to_dict('records')
 
-    if mode in ["all", "standard_only"]:
-        standard_df = pd.read_excel(file_path, sheet_name=required_sheet, header=0, usecols="E:G", dtype={'Postfix': str})
-        standard_df.columns = [str(col).strip().lower() for col in standard_df.columns]
-        if not all(col in standard_df.columns for col in standard_required_columns):
-            raise ValueError(f"The Standard section (Columns E-G) is missing required headers: std_currency, std_username, std_postfix.")
-        standard_df.rename(columns={'std_currency': 'Currency', 'std_username': 'Username', 'std_postfix': 'Postfix'}, inplace=True)
-        standard_df['Postfix'] = standard_df['Postfix'].fillna('')
-        standard_df.dropna(subset=['Currency'], inplace=True)
-        standard_users = standard_df.to_dict('records')
+        if mode in ["all", "standard_only"]:
+            standard_df = pd.read_excel(file_path, sheet_name=required_sheet, header=0, usecols="E,F")
+            standard_df.columns = [str(col).strip().lower() for col in standard_df.columns]
+            if not all(col in standard_df.columns for col in standard_required_columns):
+                raise ValueError(f"The Standard section is missing required headers: std_currency, std_username.")
+            standard_df.rename(columns={'std_currency': 'Currency', 'std_username': 'Username'}, inplace=True)
+            standard_df.dropna(subset=['Currency'], inplace=True)
+            standard_users = standard_df.to_dict('records')
+            
+    elif file_extension == '.json':
+        # --- JSON Parsing Logic (MODIFIED for flexibility) ---
+        with open(file_path, 'r') as f:
+            data = {k.lower(): v for k, v in json.load(f).items()} # Make top-level keys case-insensitive
+        
+        # Determine the correct keys for user lists
+        lvc_list_key = 'lvc_users' if 'lvc_users' in data else 'lvc_currencies'
+        std_list_key = 'standard_users' if 'standard_users' in data else 'std_currencies'
+
+        if mode in ["all", "lvc_only"] and lvc_list_key in data:
+            # Normalize keys within each user dictionary to be case-insensitive
+            normalized_lvc_users = []
+            for user in data[lvc_list_key]:
+                normalized_user = {k.lower().replace('_', ' '): v for k, v in user.items()}
+                # Standardize to the keys the application expects
+                final_user = {
+                    'Currency': normalized_user.get('lvc currency', ''),
+                    'Username': normalized_user.get('username', ''),
+                    'LVC_username': normalized_user.get('lvc username', '')
+                }
+                normalized_lvc_users.append(final_user)
+            lvc_users = normalized_lvc_users
+        
+        if mode in ["all", "standard_only"] and std_list_key in data:
+            normalized_std_users = []
+            for user in data[std_list_key]:
+                normalized_user = {k.lower().replace('_', ' '): v for k, v in user.items()}
+                final_user = {
+                    'Currency': normalized_user.get('std currency', ''),
+                    'Username': normalized_user.get('std username', '')
+                }
+                normalized_std_users.append(final_user)
+            standard_users = normalized_std_users
+    else:
+        raise ValueError(f"Unsupported file type: {file_extension}. Please select an Excel or JSON file.")
         
     return lvc_users, standard_users
 
@@ -332,7 +387,7 @@ def parse_gtp_list_file(file_path):
         raise ValueError("GTP list file must contain a non-empty JSON object.")
     return data
 
-def update_excel_with_lvc_names(file_path, migrated_user):
+def update_excel_with_lvc_names(file_path, migrated_user, postfix):
     """
     Updates the LVC_username column in the original Excel file using openpyxl.
     """
@@ -342,7 +397,7 @@ def update_excel_with_lvc_names(file_path, migrated_user):
         
         original_username = migrated_user['Username']
         original_currency = migrated_user['Currency']
-        lvc_username = f"LVC_{original_username}{migrated_user['Postfix']}"
+        lvc_username = f"LVC_{original_username}{postfix}"
 
         # Find the row to update by matching currency and original username
         for row in range(2, sheet.max_row + 1): # Start from row 2 to skip header
@@ -357,6 +412,45 @@ def update_excel_with_lvc_names(file_path, migrated_user):
     except Exception as e:
         print(f"Error updating Excel file: {e}")
 
+def update_json_with_lvc_names(file_path, migrated_user, postfix):
+    """
+    Updates the LVC_username key in the original JSON file (case-insensitively).
+    """
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        
+        original_username = migrated_user['Username']
+        original_currency = migrated_user['Currency']
+        lvc_username = f"LVC_{original_username}{postfix}"
+
+        # Find the correct list key (lvc_users or lvc_currencies)
+        lvc_list_key = None
+        for key in data.keys():
+            if key.lower() in ['lvc_users', 'lvc_currencies']:
+                lvc_list_key = key
+                break
+        
+        if lvc_list_key:
+            for user in data[lvc_list_key]:
+                # Find user by matching currency and username case-insensitively
+                user_keys_lower = {k.lower().replace('_', ' '): k for k in user.keys()}
+                
+                currency_key = user_keys_lower.get('lvc currency')
+                username_key = user_keys_lower.get('username')
+                lvc_username_key = user_keys_lower.get('lvc username')
+
+                if currency_key and username_key and lvc_username_key:
+                    if user[currency_key] == original_currency and user[username_key] == original_username:
+                        user[lvc_username_key] = lvc_username
+                        break
+        
+        with open(file_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"Successfully updated LVC_username for {original_username} in {file_path}")
+
+    except Exception as e:
+        print(f"Error updating JSON file: {e}")
 
 # =============================================================================
 # Automation Worker (Controller)
@@ -366,7 +460,7 @@ class AutomationWorker(QObject):
     automation_error = pyqtSignal(str)
     automation_finished = pyqtSignal()
 
-    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode, lvc_balance, standard_balance):
+    def __init__(self, gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode, lvc_balance, standard_balance, postfix):
         super().__init__()
         self.gtp_url = gtp_url
         self.email = email
@@ -378,6 +472,7 @@ class AutomationWorker(QObject):
         self.mode = mode
         self.lvc_balance = lvc_balance
         self.standard_balance = standard_balance
+        self.postfix = postfix
         self.is_running = True
         self.driver = None
 
@@ -401,7 +496,7 @@ class AutomationWorker(QObject):
                     self.driver.navigate_to_create_user_page(self.gtp_url)
                     for user in self.lvc_users:
                         if not self.is_running: break
-                        success = self.driver.fill_user_creation_form(user, self.user_password)
+                        success = self.driver.fill_user_creation_form(user, self.user_password, self.postfix)
                         if success:
                             created_lvc_users.append(user)
                 if not self.is_running: return
@@ -409,15 +504,19 @@ class AutomationWorker(QObject):
                 self.progress_update.emit("\n--- STEP B: Migrating Users to LVC ---")
                 for user in created_lvc_users:
                     if not self.is_running: break
-                    initial_username = f"{user['Username']}{user['Postfix']}"
+                    initial_username = f"{user['Username']}{self.postfix}"
                     self.driver.migrate_user_to_lvc(self.gtp_url, initial_username)
-                    update_excel_with_lvc_names(self.user_data_path, user)
+                    if self.user_data_path.lower().endswith(('.xlsx', '.xls')):
+                        update_excel_with_lvc_names(self.user_data_path, user, self.postfix)
+                    elif self.user_data_path.lower().endswith('.json'):
+                        update_json_with_lvc_names(self.user_data_path, user, self.postfix)
+
                 if not self.is_running: return
 
                 self.progress_update.emit("\n--- STEP C: Adding Balance to LVC Users ---")
                 for user in created_lvc_users:
                     if not self.is_running: break
-                    lvc_username = f"LVC_{user['Username']}{user['Postfix']}"
+                    lvc_username = f"LVC_{user['Username']}{self.postfix}"
                     self.driver.add_balance_to_user(self.gtp_url, lvc_username, self.lvc_balance)
                 if not self.is_running: return
 
@@ -429,7 +528,7 @@ class AutomationWorker(QObject):
                     self.driver.navigate_to_create_user_page(self.gtp_url)
                     for user in self.standard_users:
                         if not self.is_running: break
-                        success = self.driver.fill_user_creation_form(user, self.user_password)
+                        success = self.driver.fill_user_creation_form(user, self.user_password, self.postfix)
                         if success:
                             created_standard_users.append(user)
                 if not self.is_running: return
@@ -437,7 +536,7 @@ class AutomationWorker(QObject):
                 self.progress_update.emit("\n--- Adding Balance to Standard Users ---")
                 for user in created_standard_users:
                     if not self.is_running: break
-                    standard_username = f"{user['Username']}{user['Postfix']}"
+                    standard_username = f"{user['Username']}{self.postfix}"
                     self.driver.add_balance_to_user(self.gtp_url, standard_username, self.standard_balance)
 
             if self.is_running:
@@ -477,7 +576,7 @@ class MainWindow(QMainWindow):
         self.config = {}
         self.GTP_VERSIONS = {}
         self.setWindowTitle("GTP User Automation Tool v1.1")
-        self.setGeometry(100, 100, 700, 650)
+        self.setGeometry(100, 100, 700, 680) 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
@@ -521,7 +620,7 @@ class MainWindow(QMainWindow):
         self.main_layout.addLayout(cred_layout)
 
         user_layout = QHBoxLayout()
-        self.select_user_file_button = QPushButton("Select User Data File (.xlsx)")
+        self.select_user_file_button = QPushButton("Select User Data File (excel or .json)")
         self.user_file_path_label = QLabel("No file selected.")
         self.user_file_path_label.setStyleSheet("font-style: italic; color: #555;")
         user_layout.addWidget(self.select_user_file_button)
@@ -534,7 +633,13 @@ class MainWindow(QMainWindow):
         self.user_password_input.setText("snow")
         self.main_layout.addWidget(self.user_password_input)
 
-        # --- NEW: Balance Amount Inputs ---
+        postfix_label = QLabel("Postfix for Usernames:")
+        self.main_layout.addWidget(postfix_label)
+        self.postfix_input = QLineEdit()
+        self.postfix_input.setText("x1")
+        self.main_layout.addWidget(self.postfix_input)
+
+
         balance_groupbox = QGroupBox("Balance Amounts")
         balance_layout = QVBoxLayout()
         
@@ -543,7 +648,6 @@ class MainWindow(QMainWindow):
         self.lvc_balance_input = QLineEdit()
         self.lvc_balance_input.setText("7000000000000")
         self.lvc_balance_input.setMaxLength(13)
-        # self.lvc_balance_input.setValidator(QIntValidator(0, 9999999999999)) # This line caused the error
         lvc_balance_layout.addWidget(lvc_balance_label)
         lvc_balance_layout.addWidget(self.lvc_balance_input)
         balance_layout.addLayout(lvc_balance_layout)
@@ -560,7 +664,6 @@ class MainWindow(QMainWindow):
         
         balance_groupbox.setLayout(balance_layout)
         self.main_layout.addWidget(balance_groupbox)
-
 
         mode_groupbox = QGroupBox("Processing Mode")
         mode_layout = QHBoxLayout()
@@ -602,6 +705,7 @@ class MainWindow(QMainWindow):
         user_password = self.user_password_input.text()
         lvc_balance = self.lvc_balance_input.text()
         standard_balance = self.standard_balance_input.text()
+        postfix = self.postfix_input.text()
         
         mode = "all"
         if self.radio_lvc.isChecked():
@@ -613,6 +717,7 @@ class MainWindow(QMainWindow):
         if "No file selected" in cred_path: errors.append("You must select a credentials file.")
         if "No file selected" in user_data_path: errors.append("You must select a user data file.")
         if not user_password: errors.append("The password for new users cannot be empty.")
+        if not postfix: errors.append("The postfix cannot be empty.")
         if not lvc_balance.isdigit() or not standard_balance.isdigit():
             errors.append("Balance amounts must be valid numbers.")
         if errors:
@@ -643,7 +748,7 @@ class MainWindow(QMainWindow):
         self.toggle_controls(False)
 
         self.automation_thread = QThread()
-        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode, lvc_balance, standard_balance)
+        self.worker = AutomationWorker(gtp_url, email, password, lvc_users, standard_users, user_password, user_data_path, mode, lvc_balance, standard_balance, postfix)
         self.worker.moveToThread(self.automation_thread)
 
         self.worker.progress_update.connect(self.log_message)
@@ -683,7 +788,7 @@ class MainWindow(QMainWindow):
             self.check_start_button_state()
 
     def select_user_data_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select User Data File", "", "Excel Files (*.xlsx *.xls)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select User Data File", "", "Data Files (*.xlsx *.xls *.json)")
         if file_path:
             self.user_file_path_label.setText(file_path)
             self.user_file_path_label.setStyleSheet("font-style: normal; color: #000;")
@@ -716,6 +821,8 @@ class MainWindow(QMainWindow):
             self.config = {}
 
     def save_config(self):
+        self.config['postfix'] = self.postfix_input.text()
+        self.config['last_gtp_selection'] = self.gtp_dropdown.currentText()
         with open(CONFIG_FILE, 'w') as f:
             json.dump(self.config, f, indent=4)
 
@@ -724,6 +831,13 @@ class MainWindow(QMainWindow):
         gtp_path = self.config.get('gtp_list_path')
         if gtp_path and os.path.exists(gtp_path):
             self.load_gtp_list_from_path(gtp_path)
+            # Restore last selection
+            last_selection = self.config.get('last_gtp_selection')
+            if last_selection:
+                index = self.gtp_dropdown.findText(last_selection)
+                if index != -1:
+                    self.gtp_dropdown.setCurrentIndex(index)
+
 
         cred_path = self.config.get('credentials_path')
         if cred_path and os.path.exists(cred_path):
@@ -734,6 +848,10 @@ class MainWindow(QMainWindow):
         if user_data_path and os.path.exists(user_data_path):
             self.user_file_path_label.setText(user_data_path)
             self.user_file_path_label.setStyleSheet("font-style: normal; color: #000;")
+
+        postfix = self.config.get('postfix', 'x1')
+        self.postfix_input.setText(postfix)
+
 
     def check_start_button_state(self):
         """Enables the start button only if all required files are selected."""
@@ -748,6 +866,7 @@ class MainWindow(QMainWindow):
 
     def log_message(self, message):
         self.status_log.append(message)
+        logging.info(message) # Also log to file
 
     def toggle_controls(self, enabled):
         self.gtp_dropdown.setEnabled(enabled)
@@ -755,6 +874,7 @@ class MainWindow(QMainWindow):
         self.select_cred_button.setEnabled(enabled)
         self.select_user_file_button.setEnabled(enabled)
         self.user_password_input.setEnabled(enabled)
+        self.postfix_input.setEnabled(enabled)
         self.lvc_balance_input.setEnabled(enabled)
         self.standard_balance_input.setEnabled(enabled)
         self.start_button.setEnabled(enabled)
@@ -763,7 +883,7 @@ class MainWindow(QMainWindow):
         self.radio_standard.setEnabled(enabled)
         
     def closeEvent(self, event):
-        self.save_config() # Save config on close
+        self.save_config()
         if self.automation_thread and self.automation_thread.isRunning():
             self.worker.stop()
             self.automation_thread.quit()

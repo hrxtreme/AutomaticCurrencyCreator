@@ -273,7 +273,7 @@ class SplashScreen(QWidget):
         splash_layout = QVBoxLayout(self.frame)
         splash_layout.setContentsMargins(20, 20, 20, 20)
         
-        title = QLabel("GTP Automation Tool")
+        title = QLabel("Axiom Automation Tool")
         title_font = QFont("Segoe UI", 16)
         title_font.setBold(True)
         title.setFont(title_font)
@@ -597,13 +597,21 @@ class AboutDialog(QDialog):
         self.setWindowTitle("About")
         self.setFixedSize(400, 150)
         self.layout = QVBoxLayout()
-        title = QLabel("GTP Automation Tool")
+        title = QLabel("Axiom Automation Tool")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        version = QLabel("Version 1.2")
-        link = QLabel('<a href="https://github.com">Visit our GitHub Page</a>')
+        # contact = QLabel("Contact: h.tavadarkar@zensar.com")
+        contact = QLabel("Contact: "'<a href="mailto:h.tavadarkar">h.tavadarkar</a>')
+        contact.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        contact.setOpenExternalLinks(True)
+        version = QLabel("Version 1.4")
+        version.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        link = QLabel('<a href="https://github.com/hrxtreme/AutomaticCurrencyCreator">Visit our GitHub Page</a>')
+        link.setAlignment(Qt.AlignmentFlag.AlignCenter)
         link.setOpenExternalLinks(True)
         self.layout.addWidget(title)
         self.layout.addWidget(version)
+        self.layout.addWidget(contact)
         self.layout.addWidget(link)
         self.setLayout(self.layout)
 
@@ -620,7 +628,7 @@ class CustomTitleBar(QWidget):
         self.layout.setSpacing(0)
         
         # Title
-        self.title_label = QLabel("GTP Automation Tool")
+        self.title_label = QLabel("Axiom Automation Tool")
         self.title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         
         self.layout.addWidget(self.title_label)

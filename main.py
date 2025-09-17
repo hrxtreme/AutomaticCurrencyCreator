@@ -600,7 +600,7 @@ class AboutDialog(QDialog):
         title = QLabel("Axiom Automation Tool")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        # contact = QLabel("Contact: h.tavadarkar@zensar.com")
+        # contact = QLabel("Contact: h.tavadarkar@")
         contact = QLabel("Contact: "'<a href="mailto:h.tavadarkar">h.tavadarkar</a>')
         contact.setAlignment(Qt.AlignmentFlag.AlignCenter)
         contact.setOpenExternalLinks(True)
@@ -997,4 +997,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 

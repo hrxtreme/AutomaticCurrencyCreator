@@ -1,0 +1,11 @@
+{
+    "postfix": "SM",
+    "user_password": "snow",
+    "last_gtp_selection": "SANDBOX GTP-530",
+    "lvc_balance": "7000000000000",
+    "standard_balance": "9999999",
+    "gtp_list_path": "D:/Axiom Automation Tool/gtp_list.json",
+    "credentials_path": "D:/Axiom Automation Tool/Login.txt",
+    "user_data_path": "D:/Axiom Automation Tool/CurrencyUsername.xlsx",
+    "theme": "system"
+}

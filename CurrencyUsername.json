@@ -1,0 +1,227 @@
+{
+  "lvc_currencies": [
+    {
+      "LVC_Currency": "Malaysian Ringgit",
+      "Username": "MYR",
+      "LVC_username": "LVC_MYRxx"
+    },
+    {
+      "LVC_Currency": "Thai Baht",
+      "Username": "THB",
+      "LVC_username": "LVC_THBxx"
+    },
+    {
+      "LVC_Currency": "Chilean Peso",
+      "Username": "CLP",
+      "LVC_username": "LVC_CLPxx"
+    },
+    {
+      "LVC_Currency": "Rwandan Franc",
+      "Username": "RWF",
+      "LVC_username": "LVC_RWFxx"
+    },
+    {
+      "LVC_Currency": "Nigerian Naira",
+      "Username": "NGN",
+      "LVC_username": "LVC_NGNxx"
+    },
+    {
+      "LVC_Currency": "Korean Won",
+      "Username": "KRW",
+      "LVC_username": "LVC_KRWxx"
+    },
+    {
+      "LVC_Currency": "Cambodian Riel",
+      "Username": "KHR",
+      "LVC_username": "LVC_KHRxx"
+    },
+    {
+      "LVC_Currency": "Burmese Kyat",
+      "Username": "MMK",
+      "LVC_username": "LVC_MMKxx"
+    },
+    {
+      "LVC_Currency": "Lao Kip",
+      "Username": "LAK",
+      "LVC_username": "LVC_LAKxx"
+    },
+    {
+      "LVC_Currency": "Tanzanian Shilling",
+      "Username": "TZS",
+      "LVC_username": "LVC_TZSxx"
+    },
+    {
+      "LVC_Currency": "Uzbekistan Sum",
+      "Username": "UZS",
+      "LVC_username": "LVC_UZSxx"
+    },
+    {
+      "LVC_Currency": "Colombian Peso",
+      "Username": "COP",
+      "LVC_username": "LVC_COPxx"
+    },
+    {
+      "LVC_Currency": "Ugandan Shilling",
+      "Username": "UGX",
+      "LVC_username": "LVC_UGXxx"
+    },
+    {
+      "LVC_Currency": "Guinean Franc",
+      "Username": "GNF",
+      "LVC_username": "LVC_GNFxx"
+    },
+    {
+      "LVC_Currency": "Paraguayan Guarani",
+      "Username": "PYG",
+      "LVC_username": "LVC_PYGxx"
+    },
+    {
+      "LVC_Currency": "Indonesian Rupiah",
+      "Username": "IDR",
+      "LVC_username": "LVC_IDRxx"
+    },
+    {
+      "LVC_Currency": "Vietnamese Dong",
+      "Username": "VND",
+      "LVC_username": "LVC_VNDxx"
+    }
+  ],
+  "std_currencies": [
+    {
+      "std_currency": "United States Dollar",
+      "std_username": "USD"
+    },
+    {
+      "std_currency": "Argentine Peso",
+      "std_username": "ARS"
+    },
+    {
+      "std_currency": "Brazilian Real",
+      "std_username": "BRL"
+    },
+    {
+      "std_currency": "Bulgarian Lev",
+      "std_username": "BGN"
+    },
+    {
+      "std_currency": "Pound sterling",
+      "std_username": "GBP"
+    },
+    {
+      "std_currency": "Canadian Dollar",
+      "std_username": "CAD"
+    },
+    {
+      "std_currency": "Danish Krone",
+      "std_username": "DKK"
+    },
+    {
+      "std_currency": "Euro",
+      "std_username": "EUR"
+    },
+    {
+      "std_currency": "Japanese Yen",
+      "std_username": "JPY"
+    },
+    {
+      "std_currency": "Norwegian Krone",
+      "std_username": "NOK"
+    },
+    {
+      "std_currency": "Peruvian Nuevo Sol",
+      "std_username": "PEN"
+    },
+    {
+      "std_currency": "Russian Ruble",
+      "std_username": "RUB"
+    },
+    {
+      "std_currency": "South African Rand",
+      "std_username": "ZAR"
+    },
+    {
+      "std_currency": "Swedish Krona",
+      "std_username": "SEK"
+    },
+    {
+      "std_currency": "Swiss franc",
+      "std_username": "CHF"
+    },
+    {
+      "std_currency": "Thai Baht",
+      "std_username": "THB"
+    },
+    {
+      "std_currency": "Yuan Renminbi",
+      "std_username": "CNY"
+    },
+    {
+      "std_currency": "Croatia Kuna",
+      "std_username": "HRK"
+    },
+    {
+      "std_currency": "Burmese Kyat",
+      "std_username": "MMK"
+    },
+    {
+      "std_currency": "Cambodian Riel",
+      "std_username": "KHR"
+    },
+    {
+      "std_currency": "Indonesian Rupiah",
+      "std_username": "IDR"
+    },
+    {
+      "std_currency": "Korean Won",
+      "std_username": "KRW"
+    },
+    {
+      "std_currency": "Lao Kip",
+      "std_username": "LAK"
+    },
+    {
+      "std_currency": "Malaysian Ringgit",
+      "std_username": "MYR"
+    },
+    {
+      "std_currency": "Vietnamese Dong",
+      "std_username": "VND"
+    },
+    {
+      "std_currency": "Chilean Peso",
+      "std_username": "CLP"
+    },
+    {
+      "std_currency": "Tanzanian Shilling",
+      "std_username": "TZS"
+    },
+    {
+      "std_currency": "Uzbekistan Sum",
+      "std_username": "UZS"
+    },
+    {
+      "std_currency": "Colombian Peso",
+      "std_username": "COP"
+    },
+    {
+      "std_currency": "Guinean Franc",
+      "std_username": "GNF"
+    },
+    {
+      "std_currency": "Ugandan Shilling",
+      "std_username": "UGX"
+    },
+    {
+      "std_currency": "Rwandan Franc",
+      "std_username": "RWF"
+    },
+    {
+      "std_currency": "Paraguayan Guarani",
+      "std_username": "PYG"
+    },
+    {
+      "std_currency": "Nigerian Naira",
+      "std_username": "NGN"
+    }
+  ]
+}
